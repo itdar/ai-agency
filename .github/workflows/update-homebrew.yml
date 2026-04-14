@@ -1,0 +1,99 @@
+name: Update Homebrew Tap
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v3.3.0)'
+        required: true
+
+jobs:
+  update-tap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Get tag version
+        id: version
+        run: |
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            RAW_TAG="${{ github.event.inputs.tag }}"
+          else
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${RAW_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Calculate SHA256
+        id: sha
+        run: |
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${{ steps.version.outputs.tag }}.tar.gz"
+          SHA=$(curl -sL "$URL" | shasum -a 256 | cut -d' ' -f1)
+          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: itdar/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        run: |
+          cd homebrew-tap
+          cat > ai-agency.rb << 'FORMULA_EOF'
+          class AiAgency < Formula
+            desc "AI agent session launcher - AGENTS.md-based multi-agent orchestration"
+            homepage "https://github.com/itdar/ai-agency"
+            url "https://github.com/itdar/ai-agency/archive/refs/tags/TAG_PLACEHOLDER.tar.gz"
+            version "VERSION_PLACEHOLDER"
+            sha256 "SHA_PLACEHOLDER"
+            license "MIT"
+
+            def install
+              (share/"ai-agency").install "src/ai-agency.sh"
+              (share/"ai-agency").install "src/setup.sh"
+              (share/"ai-agency").install "src/HOW_TO_AGENTS.md"
+              (share/"ai-agency/scripts").install "src/scripts/sync-ai-rules.sh"
+              bin.install "src/bin/ai-agency"
+            end
+
+            def caveats
+              <<~EOS
+                Quick start:
+                  ai-agency init /path/to/project        # initialize a new project
+                  ai-agency register /path/to/project    # register an existing project
+                  ai-agency scan ~/projects              # auto-discover projects
+                  ai-agency                              # launch agent picker
+              EOS
+            end
+
+            test do
+              assert_match "ai-agency", shell_output("#{bin}/ai-agency --help")
+            end
+          end
+          FORMULA_EOF
+
+          # Replace placeholders
+          sed -i "s|TAG_PLACEHOLDER|${{ steps.version.outputs.tag }}|g" ai-agency.rb
+          sed -i "s|VERSION_PLACEHOLDER|${{ steps.version.outputs.version }}|g" ai-agency.rb
+          sed -i "s|SHA_PLACEHOLDER|${{ steps.sha.outputs.sha256 }}|g" ai-agency.rb
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' ai-agency.rb
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ai-agency.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "chore: bump ai-agency to ${{ steps.version.outputs.tag }}"
+          git push

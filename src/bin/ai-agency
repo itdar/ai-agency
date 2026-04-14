@@ -1,0 +1,794 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =============================================================================
+# ai-agency — Global CLI for ai-agency
+#
+# Provides project discovery and agent session launching from anywhere.
+#
+# Usage:
+#   ai-agency                      # Interactive: pick project → pick agent
+#   ai-agency register [path]      # Register a project directory
+#   ai-agency unregister [path]    # Remove a project from registry
+#   ai-agency list                 # List registered projects
+#   ai-agency scan [dir]           # Scan directory tree for projects with AGENTS.md
+#   ai-agency --help               # Show help
+#
+# When run inside a directory containing AGENTS.md (or a git repo with one),
+# it behaves like ./ai-agency.sh — no registration needed.
+# =============================================================================
+
+# --- Colors ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# --- Config ---
+CONFIG_DIR="${HOME}/.config/ai-agency"
+PROJECTS_FILE="${CONFIG_DIR}/projects"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve the install directory (where ai-agency.sh, setup.sh, HOW_TO_AGENTS.md live)
+# Priority: 1) same directory as this script's parent, 2) installed location
+find_install_dir() {
+  local parent_dir
+  parent_dir="$(dirname "$SCRIPT_DIR")"
+
+  # Check if ai-agency.sh exists alongside this bin/ directory
+  if [[ -f "${parent_dir}/ai-agency.sh" ]]; then
+    echo "${parent_dir}"
+    return 0
+  fi
+
+  # Check common install locations
+  local locations=(
+    "/usr/local/share/ai-agency"
+    "${HOME}/.local/share/ai-agency"
+    "$(brew --prefix 2>/dev/null)/share/ai-agency"
+  )
+
+  for loc in "${locations[@]}"; do
+    if [[ -f "${loc}/ai-agency.sh" ]]; then
+      echo "$loc"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+find_agency_script() {
+  local dir
+  if dir=$(find_install_dir); then
+    echo "${dir}/ai-agency.sh"
+    return 0
+  fi
+  return 1
+}
+
+# --- Ensure config directory exists ---
+ensure_config() {
+  mkdir -p "$CONFIG_DIR"
+  touch "$PROJECTS_FILE"
+}
+
+# --- Register a project ---
+cmd_register() {
+  ensure_config
+  local project_path
+  project_path="$(cd "${1:-.}" && pwd)"
+
+  # Verify it has AGENTS.md
+  if [[ ! -f "${project_path}/AGENTS.md" ]]; then
+    # Check subdirectories
+    local count
+    count=$(find "$project_path" -name "AGENTS.md" -not -path "*/.git/*" -not -path "*/node_modules/*" -maxdepth 3 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$count" -eq 0 ]]; then
+      echo -e "${YELLOW}Warning: No AGENTS.md found in ${project_path}${NC}"
+      echo -e "${DIM}Run setup.sh first to generate AGENTS.md files.${NC}"
+      echo -ne "${BOLD}Register anyway? (y/N):${NC} "
+      read -r confirm
+      [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
+    fi
+  fi
+
+  # Check if already registered
+  if grep -qxF "$project_path" "$PROJECTS_FILE" 2>/dev/null; then
+    echo -e "${YELLOW}Already registered:${NC} ${project_path}"
+    return 0
+  fi
+
+  echo "$project_path" >> "$PROJECTS_FILE"
+  echo -e "${GREEN}Registered:${NC} ${project_path}"
+}
+
+# --- Unregister a project ---
+cmd_unregister() {
+  ensure_config
+  local project_path
+  project_path="$(cd "${1:-.}" && pwd)"
+
+  if grep -qxF "$project_path" "$PROJECTS_FILE" 2>/dev/null; then
+    local tmp
+    tmp=$(grep -vxF "$project_path" "$PROJECTS_FILE" || true)
+    echo "$tmp" > "$PROJECTS_FILE"
+    echo -e "${GREEN}Unregistered:${NC} ${project_path}"
+  else
+    echo -e "${YELLOW}Not registered:${NC} ${project_path}"
+  fi
+}
+
+# --- List registered projects ---
+cmd_list() {
+  ensure_config
+
+  if [[ ! -s "$PROJECTS_FILE" ]]; then
+    echo -e "${DIM}No projects registered.${NC}"
+    echo ""
+    echo -e "Register a project:  ${BOLD}ai-agency register /path/to/project${NC}"
+    echo -e "Scan for projects:   ${BOLD}ai-agency scan ~/projects${NC}"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}=== Registered Projects ===${NC}"
+  echo ""
+
+  local i=0
+  while IFS= read -r project; do
+    [[ -z "$project" ]] && continue
+    i=$((i + 1))
+    local name
+    name=$(basename "$project")
+    local agent_count
+    agent_count=$(find "$project" -name "AGENTS.md" -not -path "*/.git/*" -not -path "*/node_modules/*" -maxdepth 5 2>/dev/null | wc -l | tr -d ' ')
+
+    if [[ -d "$project" ]]; then
+      echo -e "  ${GREEN}${i})${NC} ${BOLD}${name}${NC} ${DIM}(${agent_count} agents)${NC}"
+      echo -e "     ${DIM}${project}${NC}"
+    else
+      echo -e "  ${RED}${i})${NC} ${BOLD}${name}${NC} ${DIM}(directory missing)${NC}"
+      echo -e "     ${DIM}${project}${NC}"
+    fi
+  done < "$PROJECTS_FILE"
+  echo ""
+}
+
+# --- Scan for projects ---
+cmd_scan() {
+  local scan_dir="${1:-$HOME}"
+  echo -e "${DIM}Scanning ${scan_dir} for projects with AGENTS.md...${NC}"
+  echo ""
+
+  ensure_config
+
+  local found=0
+  while IFS= read -r agents_file; do
+    local project_dir
+    project_dir="$(dirname "$agents_file")"
+
+    # Only register root-level AGENTS.md (skip subdirectory agents)
+    # A root AGENTS.md is one where the directory is a git repo root or has setup.sh/ai-agency.sh
+    if [[ -d "${project_dir}/.git" ]] || [[ -f "${project_dir}/ai-agency.sh" ]] || [[ -f "${project_dir}/setup.sh" ]]; then
+      if ! grep -qxF "$project_dir" "$PROJECTS_FILE" 2>/dev/null; then
+        echo "$project_dir" >> "$PROJECTS_FILE"
+        echo -e "  ${GREEN}+${NC} ${project_dir}"
+        found=$((found + 1))
+      else
+        echo -e "  ${DIM}~${NC} ${DIM}${project_dir} (already registered)${NC}"
+      fi
+    fi
+  done < <(find "$scan_dir" -name "AGENTS.md" -not -path "*/.git/*" -not -path "*/node_modules/*" -not -path "*/__pycache__/*" -maxdepth 5 2>/dev/null | sort)
+
+  echo ""
+  echo -e "${GREEN}Found ${found} new project(s).${NC}"
+}
+
+# --- Interactive project picker (CUI) ---
+pick_project() {
+  ensure_config
+
+  if [[ ! -s "$PROJECTS_FILE" ]]; then
+    echo -e "${RED}No projects registered.${NC}"
+    echo ""
+    echo -e "Register a project:  ${BOLD}ai-agency register /path/to/project${NC}"
+    echo -e "Scan for projects:   ${BOLD}ai-agency scan ~/projects${NC}"
+    exit 1
+  fi
+
+  local -a projects=()
+  while IFS= read -r line; do
+    [[ -n "$line" && -d "$line" ]] && projects+=("$line")
+  done < "$PROJECTS_FILE"
+
+  if [[ ${#projects[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid project directories found.${NC}"
+    exit 1
+  fi
+
+  # If only one project, use it directly
+  if [[ ${#projects[@]} -eq 1 ]]; then
+    echo "${projects[0]}"
+    return 0
+  fi
+
+  # CUI project picker
+  local cursor=0
+  local count=${#projects[@]}
+
+  tput civis 2>/dev/null || true
+  trap 'tput cnorm 2>/dev/null || true' RETURN
+
+  while true; do
+    tput clear 2>/dev/null || printf '\033[2J\033[H'
+
+    echo ""
+    echo -e "${BOLD}=== Select Project ===${NC}"
+    echo -e "${DIM}Press: ${BOLD}↑↓${NC}${DIM} navigate  ${BOLD}Enter${NC}${DIM} select  ${BOLD}q${NC}${DIM} quit${NC}"
+    echo ""
+
+    for i in "${!projects[@]}"; do
+      local name
+      name=$(basename "${projects[$i]}")
+      local agent_count
+      agent_count=$(find "${projects[$i]}" -name "AGENTS.md" -not -path "*/.git/*" -not -path "*/node_modules/*" -maxdepth 5 2>/dev/null | wc -l | tr -d ' ')
+
+      if (( i == cursor )); then
+        echo -e "  \033[7m ${CYAN}${BOLD}$((i + 1)))${NC}\033[7m ${BOLD}${name}${NC}\033[7m ${DIM}(${agent_count} agents)${NC}\033[0m"
+        echo -e "     ${DIM}${projects[$i]}${NC}"
+      else
+        echo -e "  ${CYAN}${BOLD}$((i + 1)))${NC} ${BOLD}${name}${NC} ${DIM}(${agent_count} agents)${NC}"
+        echo -e "     ${DIM}${projects[$i]}${NC}"
+      fi
+      echo ""
+    done
+
+    local key=""
+    IFS= read -rsn1 key
+
+    case "$key" in
+      $'\x1b')
+        local seq1 seq2
+        IFS= read -rsn1 -t 1 seq1 || true
+        IFS= read -rsn1 -t 1 seq2 || true
+        case "${seq1}${seq2}" in
+          '[A') (( cursor > 0 )) && cursor=$((cursor - 1)) || true ;;
+          '[B') (( cursor < count - 1 )) && cursor=$((cursor + 1)) || true ;;
+        esac
+        ;;
+      '')
+        echo "${projects[$cursor]}"
+        return 0
+        ;;
+      q|Q) exit 0 ;;
+      [0-9])
+        local num="$key"
+        local more
+        IFS= read -rsn1 -t 1 more || true
+        [[ "$more" =~ ^[0-9]$ ]] && num="${num}${more}"
+        if (( num >= 1 && num <= count )); then
+          echo "${projects[$((num - 1))]}"
+          return 0
+        fi
+        ;;
+    esac
+  done
+}
+
+# --- Check if current directory is a project ---
+find_local_project() {
+  # Check current directory
+  if [[ -f "./AGENTS.md" ]]; then
+    echo "$PWD"
+    return 0
+  fi
+
+  # Check git root
+  if git rev-parse --show-toplevel &>/dev/null; then
+    local git_root
+    git_root="$(git rev-parse --show-toplevel)"
+    if [[ -f "${git_root}/AGENTS.md" ]]; then
+      echo "$git_root"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# --- Init/Setup a project ---
+cmd_init() {
+  local target="${1:-.}"
+  if [[ ! -d "$target" ]]; then
+    echo -e "${RED}Error: Directory does not exist: ${target}${NC}"
+    echo -e "${DIM}Create it first, or pass an existing directory.${NC}"
+    exit 1
+  fi
+  local project_path
+  project_path="$(cd "$target" && pwd)"
+
+  # Find the install directory where setup.sh and HOW_TO_AGENTS.md live
+  local install_dir
+  if ! install_dir=$(find_install_dir); then
+    echo -e "${RED}Error: Could not find ai-agency install directory.${NC}"
+    echo -e "${DIM}Reinstall with: brew install itdar/tap/ai-agency${NC}"
+    exit 1
+  fi
+
+  local setup_script="${install_dir}/setup.sh"
+  local how_to="${install_dir}/HOW_TO_AGENTS.md"
+  local sync_script="${install_dir}/scripts/sync-ai-rules.sh"
+
+  if [[ ! -f "$setup_script" ]]; then
+    echo -e "${RED}Error: setup.sh not found in ${install_dir}${NC}"
+    echo -e "${DIM}Reinstall with: brew install itdar/tap/ai-agency${NC}"
+    exit 1
+  fi
+
+  echo -e "${BOLD}Initializing project: ${project_path}${NC}"
+  echo ""
+
+  # Copy HOW_TO_AGENTS.md to the project (needed by setup.sh)
+  if [[ -f "$how_to" ]]; then
+    if [[ -f "${project_path}/HOW_TO_AGENTS.md" ]]; then
+      echo -e "  ${YELLOW}~${NC} HOW_TO_AGENTS.md ${DIM}(already exists, overwriting)${NC}"
+    else
+      echo -e "  ${GREEN}+${NC} HOW_TO_AGENTS.md"
+    fi
+    cp "$how_to" "${project_path}/HOW_TO_AGENTS.md"
+  fi
+
+  # Copy sync-ai-rules.sh to the project
+  if [[ -f "$sync_script" ]]; then
+    mkdir -p "${project_path}/scripts"
+    if [[ -f "${project_path}/scripts/sync-ai-rules.sh" ]]; then
+      echo -e "  ${YELLOW}~${NC} scripts/sync-ai-rules.sh ${DIM}(already exists, overwriting)${NC}"
+    else
+      echo -e "  ${GREEN}+${NC} scripts/sync-ai-rules.sh"
+    fi
+    cp "$sync_script" "${project_path}/scripts/sync-ai-rules.sh"
+    chmod +x "${project_path}/scripts/sync-ai-rules.sh"
+  fi
+
+  # Pre-classify directories and scaffold .ai-agents/ structure
+  local classify_script="${install_dir}/scripts/classify-dirs.sh"
+  local scaffold_script="${install_dir}/scripts/scaffold.sh"
+
+  if [[ -f "$classify_script" && -f "$scaffold_script" ]]; then
+    echo -e "  ${DIM}Pre-classifying directories...${NC}"
+    local classification_file="${project_path}/.ai-agents/.classification.tsv"
+    mkdir -p "${project_path}/.ai-agents"
+    bash "$classify_script" "$project_path" 3 > "$classification_file" 2>/dev/null || true
+
+    echo -e "  ${DIM}Scaffolding .ai-agents/ structure...${NC}"
+    bash "$scaffold_script" "$project_path" "$classification_file" 2>/dev/null || true
+    echo ""
+  fi
+
+  # Run setup.sh in the project directory
+  cd "$project_path"
+  export PROJECT_ROOT="$project_path"
+  export AI_AGENCY_CLI=1   # signals setup.sh to show 'ai-agency' in post-init hints
+  exec bash "$setup_script"
+}
+
+# --- Uninstall ---
+cmd_uninstall() {
+  local force=false
+  local keep_config=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -f|--force) force=true; shift ;;
+      --keep-config) keep_config=true; shift ;;
+      *) shift ;;
+    esac
+  done
+
+  echo ""
+  echo -e "${BOLD}ai-agency uninstall${NC}"
+  echo ""
+
+  # Detect install method
+  local install_method=""
+  local install_dir=""
+
+  # Check Homebrew
+  if command -v brew &>/dev/null && brew list ai-agency &>/dev/null 2>&1; then
+    install_method="brew"
+  fi
+
+  # Check global install
+  if [[ -d "${HOME}/.local/share/ai-agency" ]]; then
+    install_method="${install_method:+${install_method}+}global"
+    install_dir="${HOME}/.local/share/ai-agency"
+  fi
+
+  # Check local install (current directory)
+  if [[ -f "./ai-agency.sh" && -f "./setup.sh" && -f "./HOW_TO_AGENTS.md" ]]; then
+    install_method="${install_method:+${install_method}+}local"
+  fi
+
+  if [[ -z "$install_method" ]]; then
+    echo -e "${YELLOW}No ai-agency installation detected.${NC}"
+    echo ""
+    echo -e "${DIM}Checked:${NC}"
+    echo -e "  - Homebrew: ${DIM}not found${NC}"
+    echo -e "  - Global (${HOME}/.local/share/ai-agency): ${DIM}not found${NC}"
+    echo -e "  - Local (./ai-agency.sh): ${DIM}not found${NC}"
+    return 0
+  fi
+
+  echo -e "${BOLD}Detected installation:${NC}"
+
+  # Show what will be removed
+  local items_to_remove=()
+
+  case "$install_method" in
+    *brew*)
+      echo -e "  ${CYAN}Homebrew${NC}: $(brew --prefix)/share/ai-agency"
+      echo ""
+      echo -e "${BOLD}Run:${NC}"
+      echo -e "  ${CYAN}brew uninstall ai-agency${NC}"
+      echo ""
+      if [[ "$install_method" != *"global"* && "$install_method" != *"local"* ]]; then
+        if ! $keep_config && [[ -d "$CONFIG_DIR" ]]; then
+          echo -e "${DIM}To also remove config (project registry):${NC}"
+          echo -e "  ${CYAN}rm -rf ${CONFIG_DIR}${NC}"
+        fi
+        return 0
+      fi
+      ;;
+  esac
+
+  if [[ "$install_method" == *"global"* ]]; then
+    echo -e "  ${CYAN}Global${NC}: ${install_dir}"
+    items_to_remove+=("${install_dir}")
+    if [[ -L "${HOME}/.local/bin/ai-agency" ]]; then
+      echo -e "  ${CYAN}Symlink${NC}: ${HOME}/.local/bin/ai-agency"
+      items_to_remove+=("${HOME}/.local/bin/ai-agency")
+    fi
+  fi
+
+  if [[ "$install_method" == *"local"* ]]; then
+    echo -e "  ${CYAN}Local${NC}: ./ai-agency.sh, ./setup.sh, ./HOW_TO_AGENTS.md, ./scripts/sync-ai-rules.sh"
+    items_to_remove+=("./ai-agency.sh" "./setup.sh" "./HOW_TO_AGENTS.md")
+    [[ -f "./scripts/sync-ai-rules.sh" ]] && items_to_remove+=("./scripts/sync-ai-rules.sh")
+  fi
+
+  if ! $keep_config && [[ -d "$CONFIG_DIR" ]]; then
+    echo -e "  ${CYAN}Config${NC}: ${CONFIG_DIR}"
+    items_to_remove+=("${CONFIG_DIR}")
+  fi
+
+  echo ""
+
+  # Confirm unless --force
+  if ! $force; then
+    echo -e "${YELLOW}This will remove the files listed above.${NC}"
+    if ! $keep_config && [[ -d "$CONFIG_DIR" ]]; then
+      echo -e "${DIM}Use --keep-config to preserve project registry.${NC}"
+    fi
+    echo -ne "${BOLD}Continue? (y/N):${NC} "
+    read -r confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      echo -e "${DIM}Cancelled.${NC}"
+      return 0
+    fi
+    echo ""
+  fi
+
+  # Remove global install
+  if [[ "$install_method" == *"global"* ]]; then
+    rm -rf "${install_dir}"
+    echo -e "  ${RED}-${NC} ${install_dir}"
+    if [[ -L "${HOME}/.local/bin/ai-agency" ]]; then
+      rm -f "${HOME}/.local/bin/ai-agency"
+      echo -e "  ${RED}-${NC} ${HOME}/.local/bin/ai-agency"
+    fi
+  fi
+
+  # Remove local install
+  if [[ "$install_method" == *"local"* ]]; then
+    for f in ai-agency.sh setup.sh HOW_TO_AGENTS.md; do
+      if [[ -f "./$f" ]]; then
+        rm -f "./$f"
+        echo -e "  ${RED}-${NC} ./$f"
+      fi
+    done
+    if [[ -f "./scripts/sync-ai-rules.sh" ]]; then
+      rm -f "./scripts/sync-ai-rules.sh"
+      echo -e "  ${RED}-${NC} ./scripts/sync-ai-rules.sh"
+      # Remove scripts/ if empty
+      rmdir ./scripts 2>/dev/null && echo -e "  ${RED}-${NC} ./scripts/" || true
+    fi
+  fi
+
+  # Remove config
+  if ! $keep_config && [[ -d "$CONFIG_DIR" ]]; then
+    rm -rf "$CONFIG_DIR"
+    echo -e "  ${RED}-${NC} ${CONFIG_DIR}"
+  fi
+
+  echo ""
+  echo -e "${GREEN}${BOLD}ai-agency has been uninstalled.${NC}"
+
+  # Note about generated project files
+  echo ""
+  echo -e "${DIM}Note: Generated project files (AGENTS.md, .ai-agents/) were not removed.${NC}"
+  echo -e "${DIM}These are part of your project and can be deleted manually if needed.${NC}"
+}
+
+# --- Clear generated files ---
+cmd_clear() {
+  local target="${1:-.}"
+  if [[ ! -d "$target" ]]; then
+    echo -e "${RED}Error: Directory does not exist: ${target}${NC}"
+    exit 1
+  fi
+  local project_path
+  project_path="$(cd "$target" && pwd)"
+
+  echo ""
+  echo -e "${BOLD}ai-agency clear${NC} — Remove generated AGENTS.md and .ai-agents/ files"
+  echo -e "${DIM}Project: ${project_path}${NC}"
+  echo ""
+
+  # Find all directories with AGENTS.md or .ai-agents/
+  local -a dirs_with_agents=()
+  local -a dirs_display=()
+
+  # Root level
+  if [[ -f "${project_path}/AGENTS.md" || -d "${project_path}/.ai-agents" ]]; then
+    dirs_with_agents+=("${project_path}")
+    local root_info=""
+    [[ -f "${project_path}/AGENTS.md" ]] && root_info="AGENTS.md"
+    [[ -d "${project_path}/.ai-agents" ]] && root_info="${root_info:+${root_info} + }.ai-agents/"
+    dirs_display+=(".  (${root_info})")
+  fi
+
+  # Subdirectories
+  while IFS= read -r agents_file; do
+    local dir
+    dir="$(dirname "$agents_file")"
+    [[ "$dir" == "$project_path" ]] && continue
+    dirs_with_agents+=("$dir")
+    local rel="${dir#"$project_path"/}"
+    local info="AGENTS.md"
+    [[ -d "${dir}/.ai-agents" ]] && info="${info} + .ai-agents/"
+    dirs_display+=("${rel}  (${info})")
+  done < <(find "$project_path" -name "AGENTS.md" -not -path "*/.git/*" -not -path "*/.omc/*" -not -path "*/node_modules/*" 2>/dev/null | sort)
+
+  if [[ ${#dirs_with_agents[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No AGENTS.md or .ai-agents/ found in ${project_path}${NC}"
+    return 0
+  fi
+
+  echo -e "${BOLD}Found ${#dirs_with_agents[@]} location(s):${NC}"
+  echo ""
+  echo -e "  ${GREEN}0)${NC} ${BOLD}All${NC}  ${DIM}(remove everything)${NC}"
+  for i in "${!dirs_display[@]}"; do
+    echo -e "  ${GREEN}$((i + 1)))${NC} ${dirs_display[$i]}"
+  done
+  echo ""
+  echo -ne "${BOLD}Select locations to clear (comma-separated, or 0 for all):${NC} "
+  read -r clear_choice
+
+  local -a selected_dirs=()
+  if [[ "$clear_choice" == "0" || "$clear_choice" == "all" ]]; then
+    selected_dirs=("${dirs_with_agents[@]}")
+  else
+    IFS=',' read -ra nums <<< "$clear_choice"
+    for n in "${nums[@]}"; do
+      n=$(echo "$n" | tr -d ' ')
+      if [[ "$n" =~ ^[0-9]+$ ]] && (( n >= 1 && n <= ${#dirs_with_agents[@]} )); then
+        selected_dirs+=("${dirs_with_agents[$((n - 1))]}")
+      fi
+    done
+  fi
+
+  if [[ ${#selected_dirs[@]} -eq 0 ]]; then
+    echo -e "${YELLOW}No valid selection. Cancelled.${NC}"
+    return 0
+  fi
+
+  # Confirm
+  echo ""
+  echo -e "${YELLOW}Will remove from ${#selected_dirs[@]} location(s):${NC}"
+  for dir in "${selected_dirs[@]}"; do
+    local rel="${dir#"$project_path"}"
+    [[ -z "$rel" ]] && rel="."
+    rel="${rel#/}"
+    echo -e "  ${RED}-${NC} ${rel}/AGENTS.md"
+    [[ -d "${dir}/.ai-agents" ]] && echo -e "  ${RED}-${NC} ${rel}/.ai-agents/"
+  done
+  echo ""
+  echo -ne "${BOLD}Confirm? (y/N):${NC} "
+  read -r confirm
+  if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+    echo -e "${DIM}Cancelled.${NC}"
+    return 0
+  fi
+
+  # Remove
+  echo ""
+  for dir in "${selected_dirs[@]}"; do
+    local rel="${dir#"$project_path"}"
+    [[ -z "$rel" ]] && rel="."
+    rel="${rel#/}"
+    if [[ -f "${dir}/AGENTS.md" ]]; then
+      rm -f "${dir}/AGENTS.md"
+      echo -e "  ${RED}-${NC} ${rel}/AGENTS.md"
+    fi
+    if [[ -d "${dir}/.ai-agents" ]]; then
+      rm -rf "${dir}/.ai-agents"
+      echo -e "  ${RED}-${NC} ${rel}/.ai-agents/"
+    fi
+  done
+
+  echo ""
+  echo -e "${GREEN}${BOLD}Clear complete.${NC}"
+}
+
+# --- Help ---
+show_help() {
+  echo ""
+  echo -e "${BOLD}ai-agency${NC} — AI agent initializer & session launcher"
+  echo ""
+  echo -e "${BOLD}Usage:${NC}"
+  echo -e "  ${CYAN}ai-agency${NC}                      Interactive project & agent picker"
+  echo -e "  ${CYAN}ai-agency init${NC} [path]           Initialize a project (generate AGENTS.md + context)"
+  echo -e "  ${CYAN}ai-agency register${NC} [path]       Register a project (default: current dir)"
+  echo -e "  ${CYAN}ai-agency unregister${NC} [path]     Remove a project from registry"
+  echo -e "  ${CYAN}ai-agency list${NC}                  List registered projects"
+  echo -e "  ${CYAN}ai-agency scan${NC} [dir]            Scan directory for projects with AGENTS.md"
+  echo -e "  ${CYAN}ai-agency verify${NC} [path]          Validate AGENTS.md and .ai-agents/ structure"
+  echo -e "  ${CYAN}ai-agency classify${NC} [path]        Pre-classify directory types"
+  echo -e "  ${CYAN}ai-agency clear${NC} [path]            Remove generated AGENTS.md and .ai-agents/ files"
+  echo -e "  ${CYAN}ai-agency uninstall${NC}              Remove ai-agency from your system"
+  echo ""
+  echo -e "${BOLD}Options (passed to agent session):${NC}"
+  echo -e "  ${CYAN}-t, --tool${NC} <claude|codex>      Select AI tool"
+  echo -e "  ${CYAN}-a, --agent${NC} <keyword>           Select agent by keyword"
+  echo -e "  ${CYAN}-m, --multi${NC}                     tmux multi-agent session"
+  echo -e "  ${CYAN}-l, --list${NC}                      Print agent list only"
+  echo -e "  ${CYAN}    --lang${NC} [code]                Set UI language (en ko ja zh es fr de ru hi ar)"
+  echo ""
+  echo -e "${BOLD}Examples:${NC}"
+  echo -e "  ${DIM}# Initialize a new project${NC}"
+  echo -e "  ai-agency init ~/my-project"
+  echo ""
+  echo -e "  ${DIM}# Initialize current directory${NC}"
+  echo -e "  cd ~/my-project && ai-agency init"
+  echo ""
+  echo -e "  ${DIM}# Register and scan for existing projects${NC}"
+  echo -e "  ai-agency scan ~/projects"
+  echo ""
+  echo -e "  ${DIM}# Launch agent session${NC}"
+  echo -e "  ai-agency"
+  echo ""
+}
+
+# --- Verify AGENTS.md and .ai-agents/ structure ---
+cmd_verify() {
+  local target="${1:-.}"
+  local project_path
+  project_path="$(cd "$target" 2>/dev/null && pwd)" || {
+    echo -e "${RED}Error: Directory not found: ${target}${NC}"
+    exit 1
+  }
+
+  local install_dir
+  if ! install_dir=$(find_install_dir); then
+    echo -e "${RED}Error: Could not find ai-agency install directory.${NC}"
+    exit 1
+  fi
+
+  local validate_script="${install_dir}/scripts/validate.sh"
+  if [[ ! -f "$validate_script" ]]; then
+    echo -e "${RED}Error: validate.sh not found in ${install_dir}/scripts/${NC}"
+    exit 1
+  fi
+
+  local staleness_flag=""
+  if [[ "${2:-}" == "--staleness" ]]; then
+    staleness_flag="--staleness"
+  fi
+
+  bash "$validate_script" "$project_path" "$staleness_flag"
+}
+
+# --- Pre-classify directory types ---
+cmd_classify() {
+  local target="${1:-.}"
+  local project_path
+  project_path="$(cd "$target" 2>/dev/null && pwd)" || {
+    echo -e "${RED}Error: Directory not found: ${target}${NC}"
+    exit 1
+  }
+
+  local max_depth="${2:-3}"
+
+  local install_dir
+  if ! install_dir=$(find_install_dir); then
+    echo -e "${RED}Error: Could not find ai-agency install directory.${NC}"
+    exit 1
+  fi
+
+  local classify_script="${install_dir}/scripts/classify-dirs.sh"
+  if [[ ! -f "$classify_script" ]]; then
+    echo -e "${RED}Error: classify-dirs.sh not found in ${install_dir}/scripts/${NC}"
+    exit 1
+  fi
+
+  bash "$classify_script" "$project_path" "$max_depth"
+}
+
+# --- Main ---
+case "${1:-}" in
+  init|setup)
+    shift
+    cmd_init "${1:-}"
+    ;;
+  register)
+    shift
+    cmd_register "${1:-}"
+    ;;
+  unregister)
+    shift
+    cmd_unregister "${1:-}"
+    ;;
+  list)
+    cmd_list
+    ;;
+  scan)
+    shift
+    cmd_scan "${1:-$HOME}"
+    ;;
+  verify|check)
+    shift
+    cmd_verify "${1:-.}" "${2:-}"
+    ;;
+  classify)
+    shift
+    cmd_classify "${1:-.}" "${2:-3}"
+    ;;
+  clear)
+    shift
+    cmd_clear "${1:-}"
+    ;;
+  uninstall)
+    shift
+    cmd_uninstall "$@"
+    ;;
+  --help|-h|help)
+    show_help
+    ;;
+  *)
+    # Find ai-agency.sh
+    AGENCY_SCRIPT=""
+    if ! AGENCY_SCRIPT=$(find_agency_script); then
+      echo -e "${RED}Error: Could not find ai-agency.sh${NC}"
+      echo -e "${DIM}Make sure ai-agency is properly installed.${NC}"
+      exit 1
+    fi
+
+    # Check if we're inside a project
+    local_project=""
+    if local_project=$(find_local_project); then
+      # Inside a project — run ai-agency.sh directly
+      export PROJECT_ROOT="$local_project"
+      exec bash "$AGENCY_SCRIPT" "$@"
+    else
+      # Outside a project — pick one first
+      selected_project=$(pick_project)
+      export PROJECT_ROOT="$selected_project"
+      cd "$selected_project"
+      exec bash "$AGENCY_SCRIPT" "$@"
+    fi
+    ;;
+esac

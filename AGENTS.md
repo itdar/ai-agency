@@ -49,7 +49,8 @@ AGENTS.md (루트 PM — 현재 파일)
 ### 다국어
 - 영문(README.md, src/HOW_TO_AGENTS.md)이 원본, docs/ 내 파일은 번역본
 - 번역 시 코드 블록, 명령어, 경로명은 번역하지 않음
-- 지원 언어: en, ko, ja, zh, es, fr, de, ru, hi, ar (10개)
+- `--lang` 플래그 10종: en, ko, ja, zh, es, fr, de, ru, hi, ar
+- 현재 번역본은 5종(en + ko, ja, zh, es). fr/de/ru/hi/ar 번역본은 미작성 — `--lang`은 지원하되 README 번역은 추후 추가
 
 ## 글로벌 권한
 - 금지(Never): 사용자 프로젝트의 실제 코드를 수정, `.env`/시크릿 커밋, src/HOW_TO_AGENTS.md 내 플레이스홀더(`{snake_case}`)를 실제 값으로 치환한 채 커밋

@@ -6,7 +6,8 @@
 - [x] HOW_TO_AGENTS.md 메타 가이드 (6단계 생성 절차)
 - [x] ai-agency.sh 세션 런처 (단일 + tmux 멀티에이전트)
 - [x] setup.sh 대화형 셋업 (도구 + 언어 선택)
-- [x] 10개 언어 README 지원
+- [x] `--lang` 10종 UI 언어 수용 (en/ko/ja/zh/es/fr/de/ru/hi/ar)
+- [x] 실제 번역본 5종(en + ko/ja/zh/es) 운용 — fr/de/ru/hi/ar는 `--lang`만 지원, README 번역은 미작성
 
 ### v1.1 — 비즈니스 컨텍스트 통합 (완료)
 - [x] 비즈니스/기획/운영 컨텍스트 파일 (business-metrics.md, stakeholder-map.md, ops-runbook.md, planning-roadmap.md)

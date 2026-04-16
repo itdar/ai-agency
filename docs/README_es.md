@@ -1,4 +1,6 @@
-🌐 [English](../README.md) | [한국어](README_ko.md) | [中文](README_zh.md) | [日本語](README_ja.md) | [Español](README_es.md) | [Português](README_pt.md)
+🌐 [English](../README.md) | [한국어](README_ko.md) | [日本語](README_ja.md) | [中文](README_zh.md) | [Español](README_es.md)
+
+> ⚠️ Esta traducción puede estar desactualizada. Para la versión más reciente, consulta el [English README](../README.md) o [한국어](README_ko.md).
 
 <div align="center">
 

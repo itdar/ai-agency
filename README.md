@@ -13,6 +13,14 @@ starts already knowing your codebase, conventions, and business rules.
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-red?logo=github)](https://github.com/sponsors/itdar)
 
+<img src="imgs/init.gif" alt="ai-agency init — scan, classify, scaffold, validate" width="900">
+
+<br><br>
+
+<img src="imgs/multi.gif" alt="Pick the PM, pick sub-agents — panes spawn and coordinate via task-board.md" width="900">
+<br>
+<sub>Pick PM from the menu, pick which specialists to bring — panes spawn and coordinate through a shared <code>task-board.md</code>.</sub>
+
 </div>
 
 ---
@@ -111,24 +119,16 @@ platform/
 
 ## Running agents
 
-### Single agent
-
 ```bash
 ai-agency                       # interactive menu
-ai-agency --agent api           # jump straight to a specific agent
+ai-agency --agent api           # jump straight to one
 ```
 
-### Team mode (Claude Code)
+Pick a **coordinator** from the menu (root PM, or any domain coordinator) and it asks which specialists to bring along. `tmux` opens a pane per agent automatically — no `--multi` flag, no manual layout, no hand-wiring sub-agents.
 
-Pick "team" from the menu. A PM agent uses Claude Code's native agent teams to delegate sub-tasks to specialists. You don't manage sub-agents manually — the PM does.
+The panes coordinate through `.ai-agents/coordination/` — a plain-text task board, message log, and status JSON. Because everything is Markdown + JSON, a Claude Code agent in one pane can hand work off to a Codex agent in another. No proprietary protocol; just files.
 
-### Parallel agents (any AI tool)
-
-```bash
-ai-agency --multi               # tmux split panes, one agent per pane
-```
-
-Each pane runs an independent agent in its own tool of choice. They coordinate through `.ai-agents/coordination/` — a plain-text task board, message log, and status JSON. That's how a Claude Code agent in one pane can hand work off to a Codex agent in another. No proprietary protocol; just files.
+> Prefer a single session? Pick any non-coordinator agent (e.g. `backend`, `frontend`) and you get one agent in the current terminal, no tmux.
 
 ---
 
@@ -180,9 +180,9 @@ ai-agency init [path]            # scan → classify → generate → validate
 ai-agency classify [path]        # preview classification without generating
 
 # Daily use
-ai-agency                        # interactive launcher
-ai-agency --agent <keyword>      # launch a specific agent
-ai-agency --multi                # parallel agents in tmux panes
+ai-agency                        # interactive launcher (coordinator picks spawn tmux panes)
+ai-agency --agent <keyword>      # launch a specific agent without the menu
+ai-agency --multi                # skip all prompts, spawn the full team
 ai-agency --tool <claude|codex|gemini>
 ai-agency --lang <code>          # UI language: en ko ja zh es fr de ru hi ar
 

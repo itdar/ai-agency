@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# Mock ai-agency CLI for README demos.
+# Prints scripted output with pauses to feel real. Zero AI calls.
+set -euo pipefail
+
+B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; C=$'\033[36m'
+Y=$'\033[33m'; M=$'\033[35m'; R=$'\033[31m'; N=$'\033[0m'
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+pause() { sleep "${1:-0.25}"; }
+say()   { printf '%b\n' "$1"; }
+
+cmd="${1:-}"; shift || true
+
+case "${cmd}" in
+  "")
+    # Interactive launcher
+    say "${B}ai-agency${N}  ${D}pick an agent${N}"
+    say ""
+    printf "  1) ${M}pm${N}        ${D}root coordinator${N}\n"
+    printf "  2) ${M}backend${N}   ${D}api/${N}\n"
+    printf "  3) ${M}frontend${N}  ${D}web/${N}\n"
+    printf "  4) ${M}infra${N}     ${D}infra/${N}\n"
+    printf "  5) ${M}planner${N}   ${D}planning/${N}\n"
+    printf "  6) ${M}biz${N}       ${D}business/${N}\n"
+    say ""
+    printf "> "
+    read -r choice
+    case "${choice}" in
+      1)
+        say ""
+        say "${B}pm${N} selected  ${D}·${N} bring sub-agents along?"
+        say "  ${D}space-separated numbers, enter for none${N}"
+        printf "  [2] ${M}backend${N}  [3] ${M}frontend${N}  [4] ${M}infra${N}\n"
+        say ""
+        printf "> "
+        read -r subs
+        say ""
+        say "${C}spawning team${N} ..."
+        pause 0.7
+        printf "  ${G}✓${N} pm         → pane 0  ${D}claude code${N}\n"
+        pause 0.25
+        for s in ${subs}; do
+          case "${s}" in
+            2) printf "  ${G}✓${N} backend    → pane 1  ${D}claude code${N}\n" ;;
+            3) printf "  ${G}✓${N} frontend   → pane 2  ${D}codex${N}\n" ;;
+            4) printf "  ${G}✓${N} infra      → pane 3  ${D}claude code${N}\n" ;;
+          esac
+          pause 0.25
+        done
+        say ""
+        say "${D}attaching tmux session 'ai-agency' ...${N}"
+        pause 1
+        exec bash "${HERE}/multi-setup.sh"
+        ;;
+      *)
+        say "(selection canceled)"
+        exit 0
+        ;;
+    esac
+    ;;
+
+  init)
+    say "${B}ai-agency init${N}  ${D}(scan → classify → scaffold → validate)${N}"
+    pause 0.4
+    say "${C}→${N} scanning project tree..."
+    pause 0.6
+    say "  found ${B}4${N} sub-projects, ${B}2${N} top-level docs dirs"
+    pause 0.3
+    say "${C}→${N} classifying directories..."
+    pause 0.5
+    printf "  ${G}✓${N} %-18s ${D}%s${N}\n" "api/"       "backend (node, fastify)"
+    printf "  ${G}✓${N} %-18s ${D}%s${N}\n" "web/"       "frontend (next.js)"
+    printf "  ${G}✓${N} %-18s ${D}%s${N}\n" "infra/"     "infrastructure (terraform)"
+    printf "  ${G}✓${N} %-18s ${D}%s${N}\n" "planning/"  "technical writing"
+    printf "  ${G}✓${N} %-18s ${D}%s${N}\n" "business/"  "business analysis"
+    pause 0.4
+    say "${C}→${N} generating context layer..."
+    pause 0.3
+    printf "  ${G}+${N} AGENTS.md                           ${D}(root PM, 241 tokens)${N}\n"
+    printf "  ${G}+${N} .ai-agents/context/domain-overview.md\n"
+    printf "  ${G}+${N} .ai-agents/context/api-spec.json    ${D}(JSON DSL, ~3× cheaper)${N}\n"
+    printf "  ${G}+${N} .ai-agents/context/stakeholder-map.md\n"
+    printf "  ${G}+${N} .ai-agents/coordination/task-board.md\n"
+    printf "  ${G}+${N} api/AGENTS.md                       ${D}(backend, 287 tokens)${N}\n"
+    printf "  ${G}+${N} web/AGENTS.md                       ${D}(frontend, 262 tokens)${N}\n"
+    printf "  ${G}+${N} infra/AGENTS.md                     ${D}(infra, 218 tokens)${N}\n"
+    pause 0.4
+    say "${C}→${N} syncing vendor bootstrap files..."
+    pause 0.3
+    printf "  ${G}+${N} CLAUDE.md                ${D}(detected: Claude Code)${N}\n"
+    printf "  ${G}+${N} .cursor/rules/agents.mdc ${D}(detected: Cursor)${N}\n"
+    pause 0.4
+    say "${C}→${N} validating..."
+    pause 0.4
+    say "  ${G}✓${N} all AGENTS.md under 300-token budget"
+    say "  ${G}✓${N} references resolve"
+    say "  ${G}✓${N} no secrets detected"
+    pause 0.3
+    say ""
+    say "${B}${G}done.${N} next: ${B}ai-agency${N} ${D}(interactive launcher)${N}"
+    ;;
+
+  list)
+    say "${B}agents in this project${N}"
+    say "  ${M}pm${N}        ${D}root coordinator${N}"
+    say "  ${M}backend${N}   ${D}api/${N}"
+    say "  ${M}frontend${N}  ${D}web/${N}"
+    say "  ${M}infra${N}     ${D}infra/${N}"
+    say "  ${M}planner${N}   ${D}planning/${N}"
+    say "  ${M}biz${N}       ${D}business/${N}"
+    ;;
+
+  *)
+    say "usage: ai-agency [init|list]   (no arg = interactive launcher)"
+    exit 2
+    ;;
+esac

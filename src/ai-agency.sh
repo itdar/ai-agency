@@ -1154,8 +1154,13 @@ build_prompt() {
     prompt+="Working scope is the ${PROJECT_ROOT}/${dir}/ directory. "
     prompt+="Delegate changes outside this scope to the PM agent."
   else
-    prompt+="Work as the PM agent managing the entire project. "
-    prompt+="Only delegate to the active sub-agents listed above."
+    if [[ ${#active_sub_agents[@]} -gt 0 ]]; then
+      prompt+="Work as the ${name} agent per your AGENTS.md. "
+      prompt+="Only delegate to the active sub-agents listed above."
+    else
+      prompt+="Work as the ${name} agent per your AGENTS.md. "
+      prompt+="No active sub-agents are available — do the work directly within your role."
+    fi
   fi
 
   # Inject single-mode delegation instructions (Agent tool, in-process)
